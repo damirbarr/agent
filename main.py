@@ -1,74 +1,12 @@
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import PydanticOutputParser
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from typing import List, Optional
 import time
 import sys
 
-# Import existing tools
-from tools import search_tool, wiki_tool, save_tool, shell_tool
-
-# Import new modules
-from memory import memory
-from memory_tools import memory_tools
-from reasoning_tools import reasoning_tools
+# Import agent components from restructured modules
+from src.agent import create_agent
+from src.memory import memory
 
 load_dotenv()
-
-class ResearchResponse(BaseModel):
-    topic: str
-    summary: str
-    sources: list[str]
-    tools_used: list[str]
-    reasoning: Optional[str] = Field(default=None, description="The reasoning process used to arrive at the answer")
-
-
-# llm = ChatAnthropic(model="claude-3-5-sonnet-20241022")
-llm = ChatOpenAI(model="gpt-4o-mini")
-parser = PydanticOutputParser(pydantic_object=ResearchResponse)
-
-prompt = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            """
-            You are an advanced AI agent that helps developers with research and problem-solving.
-            
-            When answering a question, follow these steps:
-            1. THINK: Break down the problem and consider different approaches
-            2. REASON: Explain your thought process step by step
-            3. USE TOOLS: Gather necessary information using available tools
-            4. REMEMBER: Store important facts in memory for future reference
-            5. ANSWER: Provide a clear, comprehensive answer
-            
-            Use memory tools to recall previous conversations or facts when relevant.
-            Use reasoning tools to structure your thinking on complex problems.
-            
-            Always provide your reasoning process to show how you arrived at your answer.
-            
-            Wrap the output in this format and provide no other text\n{format_instructions}
-            """,
-        ),
-        ("placeholder", "{chat_history}"), # filled by the AgentExecutor
-        ("human", "{query}"), # filled by the user
-        ("placeholder", "{agent_scratchpad}"), # filled by the AgentExecutor
-    ]
-).partial(format_instructions=parser.get_format_instructions())
-
-# Combine all tools
-tools = [search_tool, wiki_tool, save_tool, shell_tool] + memory_tools + reasoning_tools
-
-agent = create_tool_calling_agent(
-    llm=llm,
-    prompt=prompt,
-    tools=tools
-)
-
-agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 def display_help():
     """Display available commands to the user."""
@@ -93,7 +31,8 @@ def main():
     print("Type 'help' to see available commands")
     print("================================")
     
-    chat_history = []
+    # Create agent and parser
+    agent_executor, parser = create_agent()
     friendly_mode = False
     
     while True:

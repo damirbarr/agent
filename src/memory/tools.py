@@ -1,5 +1,5 @@
 from langchain.tools import tool
-from memory import memory
+from src.memory.memory import memory
 
 @tool
 def remember_fact(key: str, value: str) -> str:

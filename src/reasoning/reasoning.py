@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel, Field
 
 class ThoughtStep(BaseModel):
@@ -19,7 +19,7 @@ class ActionStep(BaseModel):
 
 class Reasoning(BaseModel):
     """A chain of thoughts and actions representing the agent's reasoning process."""
-    steps: List[ThoughtStep | ActionStep] = Field(default_factory=list, 
+    steps: List[Union[ThoughtStep, ActionStep]] = Field(default_factory=list, 
                                                description="The steps in the reasoning process")
     final_answer: Optional[str] = Field(default=None, 
                                      description="The final answer after reasoning")
