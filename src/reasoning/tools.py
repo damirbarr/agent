@@ -4,10 +4,10 @@ from langchain.tools import tool
 def analyze_problem(problem: str) -> str:
     """
     Break down a complex problem into smaller, more manageable steps.
-    
+
     Args:
         problem: The problem statement to analyze
-    
+
     Returns:
         A structured breakdown of the problem
     """
@@ -27,21 +27,21 @@ def analyze_problem(problem: str) -> str:
 def evaluate_options(options: str, criteria: str) -> str:
     """
     Evaluate different options based on given criteria.
-    
+
     Args:
         options: Comma-separated list of options to evaluate
         criteria: Criteria to evaluate the options against
-    
+
     Returns:
         An analysis of the options
     """
     option_list = [opt.strip() for opt in options.split(",")]
     result = [f"Evaluating {len(option_list)} options based on: {criteria}\n"]
-    
+
     for i, option in enumerate(option_list):
         result.append(f"Option {i+1}: {option}")
         result.append(f"  Evaluation: This option should be considered in relation to the criteria.")
-    
+
     result.append("\nRecommendation: Consider the evaluations above to make a decision.")
     return "\n".join(result)
 
@@ -49,10 +49,10 @@ def evaluate_options(options: str, criteria: str) -> str:
 def chain_of_thought(question: str) -> str:
     """
     Apply chain-of-thought reasoning to a question.
-    
+
     Args:
         question: The question to reason about
-    
+
     Returns:
         A step-by-step reasoning process
     """
