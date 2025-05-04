@@ -5,7 +5,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain.agents import create_tool_calling_agent, AgentExecutor
-from tools import search_tool, wiki_tool, save_tool
+from tools import search_tool, wiki_tool, save_tool, shell_tool
 
 load_dotenv()
 
@@ -14,9 +14,10 @@ class ResearchResponse(BaseModel):
     summary: str
     sources: list[str]
     tools_used: list[str]
-    
 
-llm = ChatAnthropic(model="claude-3-5-sonnet-20241022")
+
+# llm = ChatAnthropic(model="claude-3-5-sonnet-20241022")
+llm = ChatOpenAI(model="gpt-4o-mini")
 parser = PydanticOutputParser(pydantic_object=ResearchResponse)
 
 prompt = ChatPromptTemplate.from_messages(
@@ -24,18 +25,18 @@ prompt = ChatPromptTemplate.from_messages(
         (
             "system",
             """
-            You are a research assistant that will help generate a research paper.
+            You an AI agent that will help a developer in all their needs.
             Answer the user query and use neccessary tools. 
             Wrap the output in this format and provide no other text\n{format_instructions}
             """,
         ),
-        ("placeholder", "{chat_history}"),
-        ("human", "{query}"),
-        ("placeholder", "{agent_scratchpad}"),
+        ("placeholder", "{chat_history}"), # filled by the AgentExecutor
+        ("human", "{query}"), # filled by the user
+        ("placeholder", "{agent_scratchpad}"), # filled by the AgentExecutor
     ]
 ).partial(format_instructions=parser.get_format_instructions())
 
-tools = [search_tool, wiki_tool, save_tool]
+tools = [search_tool, wiki_tool, save_tool, shell_tool]
 agent = create_tool_calling_agent(
     llm=llm,
     prompt=prompt,
@@ -47,7 +48,7 @@ query = input("What can i help you research? ")
 raw_response = agent_executor.invoke({"query": query})
 
 try:
-    structured_response = parser.parse(raw_response.get("output")[0]["text"])
+    structured_response = parser.parse(raw_response.get("output"))
     print(structured_response)
 except Exception as e:
     print("Error parsing response", e, "Raw Response - ", raw_response)
