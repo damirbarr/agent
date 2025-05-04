@@ -5,7 +5,9 @@ from datetime import datetime
 import subprocess
 from langchain_community.document_loaders.pdf import PyPDFLoader
 
-def save_to_txt(data: str, filename: str = "research_output.txt"):
+def save_to_txt(data: str, filename):
+    if filename is None:
+        filename = f"output_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     formatted_text = f"--- Output ---\nTimestamp: {timestamp}\n\n{data}\n\n"
 
