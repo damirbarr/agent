@@ -6,3 +6,9 @@ langchain-anthropic
 python-dotenv
 pydantic
 duckduckgo-search
+fastapi>=0.104.0
+uvicorn>=0.23.2
+pytest>=7.4.0
+requests>=2.31.0
+httpx>=0.25.0  # For FastAPI testing
+pytest-asyncio>=0.21.1  # For async tests

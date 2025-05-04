@@ -80,3 +80,26 @@ clean: ## Clean up temporary files
 # 	else \
 # 		echo ".env file already exists."; \
 # 	fi
+
+# Add a new target for running the API server
+run-api: ## Run the agent API server
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	$(VENV_BIN)$(PYTHON_COMMAND) -m uvicorn api:app --reload
+
+# Add a new target for running the API tests
+test-api: ## Run the API server tests
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	$(VENV_BIN)$(PYTHON_COMMAND) -m pytest test_api.py -v
+
+run-client: ## Run the client
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	$(VENV_BIN)$(PYTHON_COMMAND) -m client
