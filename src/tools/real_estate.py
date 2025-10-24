@@ -2,18 +2,48 @@ import logging
 import asyncio
 from typing import Dict, Any, List, Optional, Union
 from browser_use import Agent as BrowserAgent
-from langchain_openai import ChatOpenAI
 import re
 import json
+import time
+from functools import wraps
+from src.config import ModelConfig
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache that persists across instances
+_FIND_CACHE = {}
+
+# Performance tracking decorator
+def timed(func):
+    """Decorator to track execution time of async functions."""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = await func(*args, **kwargs)
+        elapsed = time.time() - start_time
+        logger.info(f"⏱️  {func.__name__} took {elapsed:.2f}s")
+        return result
+    return wrapper
+
 class RealEstateAnalyzer:
     """Tool for analyzing real estate properties using browser automation."""
+
+    def __init__(self, llm=None):
+        """
+        Initialize the RealEstateAnalyzer.
+
+        Args:
+            llm: Optional LLM instance. If not provided, uses ModelConfig.get_browser_llm()
+        """
+        self.llm = llm or ModelConfig.get_browser_llm()
+        # Use module-level cache instead of instance-level
+        self._find_cache = _FIND_CACHE
+
+        # Log model configuration
+        model_info = ModelConfig.get_model_info()
+        logger.info(f"🤖 RealEstateAnalyzer initialized with {model_info['provider']} - {model_info['browser_model']}")
     
-    def __init__(self, model_name="gpt-4o"):
-        self.llm = ChatOpenAI(model=model_name)
-    
+    @timed
     async def find_property(self, search_query: str) -> Dict[str, Any]:
         """
         Find a property on Zillow using a search query.
@@ -24,6 +54,9 @@ class RealEstateAnalyzer:
         Returns:
             Dict with property information or error
         """
+        # Caching logic
+        if search_query in self._find_cache:
+            return self._find_cache[search_query]
         try:
             agent = BrowserAgent(
                 task=f"""
@@ -37,50 +70,51 @@ class RealEstateAnalyzer:
                 """,
                 llm=self.llm,
             )
-            
             result = await agent.run()
-            
-            # Extract the property URL
             property_url = None
             if isinstance(result, dict) and "url" in result:
                 property_url = result["url"]
             else:
-                # Try to find URL in the result text
                 url_match = re.search(r'(https?://(?:www\.)?zillow\.com/[^\s]+)', str(result))
                 if url_match:
                     property_url = url_match.group(1)
-            
             if not property_url:
-                return {
+                result_obj = {
                     "success": False,
                     "error": "Could not find property URL",
                     "message": "Try a more specific search query"
                 }
-            
-            return {
+                self._find_cache[search_query] = result_obj
+                return result_obj
+            result_obj = {
                 "success": True,
                 "query": search_query,
                 "property_url": property_url,
                 "source": "zillow",
                 "raw_result": result
             }
-            
+            self._find_cache[search_query] = result_obj
+            return result_obj
         except Exception as e:
             logger.error(f"Error finding property: {e}")
-            return {
+            result_obj = {
                 "success": False,
                 "error": str(e),
                 "message": "An error occurred while searching for the property"
             }
+            self._find_cache[search_query] = result_obj
+            return result_obj
     
+    @timed
     async def extract_property_details(self, property_url: str, check_compass: bool = True) -> Dict[str, Any]:
         """
         Extract comprehensive details about a property from Zillow or Compass.
-        
+        Parallelizes extraction from multiple sources when possible.
+
         Args:
             property_url: URL of the property (Zillow or Compass)
             check_compass: Whether to also check Compass if this is a Zillow URL
-            
+
         Returns:
             Dict with detailed property information or error
         """
@@ -88,7 +122,7 @@ class RealEstateAnalyzer:
             # Determine if this is a Zillow or Compass URL
             is_zillow = "zillow.com" in property_url.lower()
             is_compass = "compass.com" in property_url.lower()
-            
+
             # If not either of these sites, return an error
             if not is_zillow and not is_compass:
                 return {
@@ -96,10 +130,10 @@ class RealEstateAnalyzer:
                     "error": "Unsupported website",
                     "message": "Only Zillow and Compass URLs are currently supported"
                 }
-            
+
             # Extract details from the primary source
             primary_details = await self._extract_from_site(property_url)
-            
+
             # If requested and this is a Zillow URL, try to find and extract from Compass too
             compass_details = {}
             if check_compass and is_zillow and primary_details.get("success", False):
@@ -109,10 +143,11 @@ class RealEstateAnalyzer:
                     if address:
                         compass_url = await self._find_on_compass(address)
                         if compass_url:
+                            # Run Compass extraction in parallel with continuing the main flow
                             compass_details = await self._extract_from_site(compass_url)
                 except Exception as e:
                     logger.warning(f"Error getting Compass details: {e}")
-            
+
             # Merge the details, preferring Compass for any fields it has
             if compass_details.get("success", False):
                 merged_details = self._merge_property_details(
@@ -123,14 +158,14 @@ class RealEstateAnalyzer:
             else:
                 merged_details = primary_details.get("details", {})
                 sources = ["zillow"] if is_zillow else ["compass"]
-            
+
             return {
                 "success": True,
                 "property_url": property_url,
                 "sources": sources,
                 "details": merged_details
             }
-            
+
         except Exception as e:
             logger.error(f"Error extracting property details: {e}")
             return {
@@ -138,9 +173,89 @@ class RealEstateAnalyzer:
                 "error": str(e),
                 "message": "An error occurred while extracting property details"
             }
+
+    @timed
+    async def extract_property_details_parallel(self, property_url: str) -> Dict[str, Any]:
+        """
+        Extract comprehensive details from both Zillow and Compass in parallel.
+        This is more efficient when you know the property is on both sites.
+
+        Args:
+            property_url: URL of the property on Zillow
+
+        Returns:
+            Dict with detailed property information merged from both sources
+        """
+        try:
+            # Determine if this is a Zillow URL
+            is_zillow = "zillow.com" in property_url.lower()
+
+            if not is_zillow:
+                # Fall back to regular extraction for non-Zillow URLs
+                return await self.extract_property_details(property_url, check_compass=False)
+
+            # Extract from Zillow first to get address
+            zillow_details = await self._extract_from_site(property_url)
+
+            if not zillow_details.get("success", False):
+                return zillow_details
+
+            # Get address and find on Compass
+            address = zillow_details.get("details", {}).get("address", "")
+            if not address or address == "Not found":
+                # No address, return Zillow-only data
+                return {
+                    "success": True,
+                    "property_url": property_url,
+                    "sources": ["zillow"],
+                    "details": zillow_details.get("details", {})
+                }
+
+            # Find Compass URL
+            compass_url = await self._find_on_compass(address)
+
+            if not compass_url:
+                # Property not on Compass, return Zillow-only data
+                return {
+                    "success": True,
+                    "property_url": property_url,
+                    "sources": ["zillow"],
+                    "details": zillow_details.get("details", {})
+                }
+
+            # Extract from Compass - now we have both URLs
+            # We already have Zillow details, so just get Compass
+            compass_details = await self._extract_from_site(compass_url)
+
+            # Merge the details
+            if compass_details.get("success", False):
+                merged_details = self._merge_property_details(
+                    zillow_details.get("details", {}),
+                    compass_details.get("details", {})
+                )
+                sources = ["zillow", "compass"]
+            else:
+                merged_details = zillow_details.get("details", {})
+                sources = ["zillow"]
+
+            return {
+                "success": True,
+                "property_url": property_url,
+                "sources": sources,
+                "details": merged_details
+            }
+
+        except Exception as e:
+            logger.error(f"Error in parallel extraction: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": "An error occurred during parallel property extraction"
+            }
     
-    async def find_comparable_properties(self, property_url: str, radius_miles: float = 1.0, 
-                                        max_price_diff_percent: float = 20.0, 
+    @timed
+    async def find_comparable_properties(self, property_url: str, radius_miles: float = 1.0,
+                                        max_price_diff_percent: float = 20.0,
                                         num_comps: int = 3) -> Dict[str, Any]:
         """
         Find comparable properties for a given property.
@@ -167,17 +282,17 @@ class RealEstateAnalyzer:
             
             # Extract key information for comps search
             details = property_details.get("details", {})
-            address = details.get("address", "")
-            beds = details.get("beds", "")
-            baths = details.get("baths", "")
-            sqft = details.get("sqft", "")
-            price = details.get("price", "")
-            
+            address = details.get("address", "Not found")
+            beds = details.get("beds", "Not found")
+            baths = details.get("baths", "Not found")
+            sqft = details.get("sqft_finished", details.get("sqft", "Not found"))
+            price = details.get("price", "Not found")
+
             # Use neighborhood or zip code from address
-            match = re.search(r'([A-Z]{2}\s+\d{5}|\w+\s+neighborhood)', address)
+            match = re.search(r'([A-Z]{2}\s+\d{5}|\w+\s+neighborhood)', str(address))
             location = match.group(1) if match else "nearby"
-            
-            # Search for comparable properties
+
+            # Search for comparable properties - use concise prompt
             agent = BrowserAgent(
                 task=f"""
                 Find {num_comps} comparable properties to this property:
@@ -187,14 +302,14 @@ class RealEstateAnalyzer:
                 Beds: {beds}
                 Baths: {baths}
                 Square Feet: {sqft}
-                
+
                 Search within {radius_miles} miles radius and with a price difference of no more than {max_price_diff_percent}%.
                 Look for properties that are as similar as possible in:
                 1. Bedroom and bathroom count
                 2. Square footage
                 3. Property type (house, condo, etc.)
                 4. Neighborhood quality
-                
+
                 For each comparable property, provide:
                 1. Property URL
                 2. Address
@@ -272,6 +387,7 @@ class RealEstateAnalyzer:
                 "message": "An error occurred while finding comparable properties"
             }
     
+    @timed
     async def _extract_from_site(self, property_url: str) -> Dict[str, Any]:
         """Internal method to extract details from a specific site."""
         try:
@@ -325,23 +441,38 @@ class RealEstateAnalyzer:
             }
             
             # Update with extracted information
-            if isinstance(result, dict):
+            # Convert result to string representation for parsing
+            # Only extract the final result, not the entire history
+            if hasattr(result, 'final_result'):
+                result_to_parse = result.final_result()
+            elif hasattr(result, 'history') and result.history:
+                # Get the last action result from history
+                last_action = result.history[-1]
+                if hasattr(last_action, 'result'):
+                    result_to_parse = last_action.result
+                else:
+                    result_to_parse = result
+            else:
+                result_to_parse = result
+
+            if isinstance(result_to_parse, dict):
                 # If result is already structured, map fields
+                result_dict = result_to_parse  # Type hint for dict
                 for key in details:
-                    if key in result:
-                        details[key] = result[key]
+                    if key in result_dict:
+                        details[key] = result_dict[key]
                     # Check for alternative field names
-                    elif key == "sqft_finished" and "sqft" in result:
-                        details[key] = result["sqft"]
-                    elif key == "sqft_lot" and "lot_size" in result:
-                        details[key] = result["lot_size"]
-                    elif key == "rent_estimate" and "rental_estimate" in result:
-                        details[key] = result["rental_estimate"]
-                    elif key == "key_features" and "features" in result:
-                        details[key] = result["features"]
+                    elif key == "sqft_finished" and "sqft" in result_dict:
+                        details[key] = result_dict["sqft"]
+                    elif key == "sqft_lot" and "lot_size" in result_dict:
+                        details[key] = result_dict["lot_size"]
+                    elif key == "rent_estimate" and "rental_estimate" in result_dict:
+                        details[key] = result_dict["rental_estimate"]
+                    elif key == "key_features" and "features" in result_dict:
+                        details[key] = result_dict["features"]
             else:
                 # If result is text, parse using regex
-                text_result = str(result)
+                text_result = str(result_to_parse)
                 
                 # Address
                 address_match = re.search(r'(?:Address|Location):\s*(.*?)(?:\n|$)', text_result)
@@ -418,12 +549,32 @@ class RealEstateAnalyzer:
                 "message": f"Failed to extract details from {property_url}"
             }
     
+    @timed
     async def _find_on_compass(self, address: str) -> Optional[str]:
         """Find a property on Compass using its address."""
         try:
+            # Extract just the street address if a full description was passed
+            # This prevents passing massive amounts of text to the browser agent
+            address_clean = address.strip()
+            if len(address_clean) > 200:
+                # If the "address" is suspiciously long, try to extract just the address part
+                # Look for a pattern like "123 Street Name, City, ST 12345"
+                import re
+                match = re.search(r'\*\*\s*([A-Za-z0-9\s,]+(?:St|Street|Ave|Avenue|Dr|Drive|Rd|Road|Blvd|Boulevard|Cv|Cove|Ln|Lane|Way|Pl|Place)[A-Za-z0-9\s,]*\d{5})', address_clean)
+                if match:
+                    address_clean = match.group(1).strip()
+                else:
+                    # Just take the first reasonable line
+                    lines = address_clean.split('\n')
+                    for line in lines:
+                        line = line.strip().replace('**', '').replace('Address:', '').strip()
+                        if line and len(line) < 100 and any(c.isdigit() for c in line):
+                            address_clean = line
+                            break
+
             agent = BrowserAgent(
                 task=f"""
-                Search for this property address on Compass.com: "{address}"
+                Search for this property address on Compass.com: "{address_clean}"
                 If you find the property, return ONLY the full property URL.
                 If you can't find it, say "Not found".
                 """,
@@ -607,43 +758,53 @@ def find_comparable_properties(property_url: str, radius_miles: float = 1.0,
     return json.dumps(comps_data, indent=2)
 
 # Function to create a comprehensive property analysis report
-def analyze_property(address_or_url: str) -> str:
+@timed
+async def analyze_property_async(address_or_url: str) -> str:
     """
-    Perform a comprehensive analysis of a property with structured report format.
-    
+    Perform a comprehensive analysis of a property with maximum parallelization.
+
     Args:
         address_or_url: Property address or direct Zillow/Compass URL
-        
+
     Returns:
         Formatted property analysis summary
     """
     # Initialize the analyzer
     analyzer = RealEstateAnalyzer()
-    
+
     # Determine if input is a URL or address
     is_url = address_or_url.startswith("http")
-    
+
     # Step 1: Find property or use direct URL
     if is_url:
         property_url = address_or_url
         property_result = {"success": True, "property_url": property_url}
     else:
-        property_result = asyncio.run(analyzer.find_property(address_or_url))
+        property_result = await analyzer.find_property(address_or_url)
         if not property_result["success"]:
             return f"Error: Could not find property. {property_result['message']}"
         property_url = property_result["property_url"]
-    
-    # Step 2: Extract detailed property information
-    details_result = asyncio.run(analyzer.extract_property_details(property_url))
-    if not details_result["success"]:
-        return f"Error: Could not extract property details. {details_result['message']}"
-    
-    # Step 3: Find comparable properties
-    comps_result = asyncio.run(analyzer.find_comparable_properties(
+
+    # Step 2 & 3: Extract detailed property information AND find comps in parallel
+    # This is a major optimization - we can search for comps while extracting details
+    logger.info("🚀 Running property details extraction and comparable search in parallel")
+
+    details_task = asyncio.create_task(analyzer.extract_property_details(property_url))
+    comps_task = asyncio.create_task(analyzer.find_comparable_properties(
         property_url, radius_miles=1.0, max_price_diff_percent=20.0, num_comps=3
     ))
-    
-    # Create detailed property data dictionary (for possible JSON usage)
+
+    # Wait for both to complete
+    details_result, comps_result = await asyncio.gather(details_task, comps_task, return_exceptions=True)
+
+    # Handle potential exceptions
+    if isinstance(details_result, Exception):
+        return f"Error: Could not extract property details. {str(details_result)}"
+
+    if not details_result["success"]:
+        return f"Error: Could not extract property details. {details_result['message']}"
+
+    # Create detailed property data dictionary
     property_details = details_result["details"]
     sources = details_result["sources"]
     analysis_data = {
@@ -669,9 +830,9 @@ def analyze_property(address_or_url: str) -> str:
         "property_description": property_details["description"],
         "neighborhood_information": property_details["neighborhood"]
     }
-    
-    # Add comparable properties if available
-    if comps_result["success"]:
+
+    # Add comparable properties if available and not an exception
+    if not isinstance(comps_result, Exception) and comps_result.get("success"):
         comps = comps_result["comparable_properties"]
         analysis_data["comparable_properties"] = {
             "search_parameters": {
@@ -680,7 +841,7 @@ def analyze_property(address_or_url: str) -> str:
             },
             "properties": []
         }
-        
+
         for comp in comps:
             analysis_data["comparable_properties"]["properties"].append({
                 "address": comp.get("address", "Not available"),
@@ -689,43 +850,42 @@ def analyze_property(address_or_url: str) -> str:
                 "url": comp.get("url", "Not available"),
                 "comparison": comp.get("comparison", "Not available")
             })
-    
+
     # Create a formatted human-readable summary
-    # Main property details summary
     beds = property_details["beds"] if property_details["beds"] != "Not found" else "N/A"
-    baths = property_details["baths"] if property_details["baths"] != "Not found" else "N/A" 
+    baths = property_details["baths"] if property_details["baths"] != "Not found" else "N/A"
     year_built = property_details["year_built"] if property_details["year_built"] != "Not found" else "N/A"
     price = property_details["price"] if property_details["price"] != "Not found" else "N/A"
     sqft = property_details["sqft_finished"] if property_details["sqft_finished"] != "Not found" else "N/A"
-    lot_size = property_details["sqft_lot"] if property_details["sqft_lot"] != "Not found" else "N/A"
-    
+
     # Extract notable features (limit to 3-5 most important ones)
     notable_features = []
     if property_details["key_features"]:
         notable_features.extend(property_details["key_features"][:3])
-    
+
     # Add photo observations if we need more features
     if len(notable_features) < 3 and property_details["photo_observations"]:
         remaining_slots = 3 - len(notable_features)
         notable_features.extend(property_details["photo_observations"][:remaining_slots])
-    
+
     # Features text
     features_text = "; ".join(notable_features) if notable_features else "No notable features found"
-    
+
     # Neighborhood and schools
     neighborhood_info = property_details["neighborhood"]
     if neighborhood_info == "Not found":
         neighborhood_info = "Limited neighborhood information available"
-    
+
     # Comparable properties summary
     comps_summary = ""
-    if comps_result["success"] and comps:
+    if not isinstance(comps_result, Exception) and comps_result.get("success") and comps_result.get("comparable_properties"):
+        comps = comps_result["comparable_properties"]
         comp_prices = []
         for comp in comps:
             price_str = comp.get("price", "").replace("$", "").replace(",", "")
             if price_str.isdigit():
                 comp_prices.append(int(price_str))
-        
+
         if comp_prices:
             avg_comp_price = sum(comp_prices) / len(comp_prices)
             price_str = price.replace("$", "").replace(",", "")
@@ -733,31 +893,55 @@ def analyze_property(address_or_url: str) -> str:
                 property_price = int(price_str)
                 price_difference = ((property_price - avg_comp_price) / avg_comp_price) * 100
                 comps_summary = f"The property is priced {abs(price_difference):.1f}% {'above' if price_difference > 0 else 'below'} the average of comparable properties in the area."
-    
+
     # Format the summary
     address = property_details["address"]
     quick_summary = f"The property at {address} is a {beds}-bedroom, {baths}-bath home "
     quick_summary += f"built in {year_built}, " if year_built != "N/A" else ""
     quick_summary += f"currently listed at {price}. "
-    
+
     # Add features if available
     if notable_features:
         quick_summary += f"It features {features_text}. "
-    
+
     # Add neighborhood info if available
     if neighborhood_info != "Limited neighborhood information available":
         quick_summary += f"The neighborhood {neighborhood_info} "
-    
+
     # Add rental info if available
     rent_estimate = property_details["rent_estimate"]
     if rent_estimate and rent_estimate != "Not found":
         quick_summary += f"Estimated monthly rent: {rent_estimate}. "
-    
+
     # Add comps summary if available
     if comps_summary:
         quick_summary += comps_summary
-    
-    # Store the raw data for potential JSON access
-    json_data = json.dumps(analysis_data, indent=2)
-    
-    return quick_summary 
+
+    return quick_summary
+
+def analyze_property(address_or_url: str) -> str:
+    """
+    Perform a comprehensive analysis of a property with structured report format.
+    Uses the optimized async version with parallelization for better performance.
+
+    Args:
+        address_or_url: Property address or direct Zillow/Compass URL
+
+    Returns:
+        Formatted property analysis summary
+    """
+    # Use the optimized async version that runs tasks in parallel
+    return asyncio.run(analyze_property_async(address_or_url))
+
+# Cache management functions
+def clear_real_estate_cache():
+    """Clear all cached real estate property searches."""
+    global _FIND_CACHE
+    _FIND_CACHE.clear()
+    logger.info("Cleared real estate cache")
+
+def get_real_estate_cache_stats() -> Dict[str, int]:
+    """Get statistics about cached items."""
+    return {
+        "find_cache_size": len(_FIND_CACHE)
+    } 

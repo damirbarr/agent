@@ -1,10 +1,9 @@
-from langchain_openai import ChatOpenAI
-from langchain_anthropic import ChatAnthropic
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from pydantic import BaseModel, Field
 from typing import List, Optional
+from src.config import ModelConfig
 
 # Import tools from modules
 from src.tools.base import (
@@ -22,14 +21,29 @@ class ResearchResponse(BaseModel):
     tools_used: list[str]
     reasoning: Optional[str] = Field(default=None, description="The reasoning process used to arrive at the answer")
 
-def create_agent(model="gpt-4o-mini"):
-    """Create and configure an agent with all necessary tools."""
+def create_agent(model=None):
+    """
+    Create and configure an agent with all necessary tools.
 
-    # Select the LLM
-    if "claude" in model:
-        llm = ChatAnthropic(model=model)
+    Args:
+        model: Optional model name. If not provided, uses MAIN_AGENT_MODEL from .env
+
+    Returns:
+        Tuple of (agent_executor, parser)
+    """
+    # Get LLM from config
+    if model:
+        # If specific model provided, try to infer provider
+        if "gpt" in model or "openai" in model.lower():
+            llm = ModelConfig.get_llm(provider="openai", model=model)
+        elif "claude" in model or "anthropic" in model.lower():
+            llm = ModelConfig.get_llm(provider="anthropic", model=model)
+        elif "gemini" in model or "google" in model.lower():
+            llm = ModelConfig.get_llm(provider="google", model=model)
+        else:
+            llm = ModelConfig.get_main_agent_llm()
     else:
-        llm = ChatOpenAI(model=model)
+        llm = ModelConfig.get_main_agent_llm()
 
     # Create the output parser
     parser = PydanticOutputParser(pydantic_object=ResearchResponse)

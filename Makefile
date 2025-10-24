@@ -104,3 +104,32 @@ run-client: ## Run the client
 		make install; \
 	fi
 	$(VENV_BIN)$(PYTHON_COMMAND) -m client
+
+test-token-optimization: ## Test token optimization fixes
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	$(VENV_BIN)$(PYTHON_COMMAND) test_token_optimization.py
+
+test-cache-persistence: ## Test cache persistence across function calls
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	$(VENV_BIN)$(PYTHON_COMMAND) test_cache_persistence.py
+
+test-performance: ## Test task completion speed optimizations (requires live browser)
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	@echo "⚠️  This test performs real browser automation and may take 30-60 seconds"
+	$(VENV_BIN)$(PYTHON_COMMAND) test_performance.py
+
+test-model-config: ## Test AI model configuration and provider switching
+	@if [ ! -d "$(VENV_PATH)" ]; then \
+		echo "Virtual environment not found. Running make install..."; \
+		make install; \
+	fi
+	$(VENV_BIN)$(PYTHON_COMMAND) test_model_config.py
