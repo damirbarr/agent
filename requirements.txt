@@ -1,6 +1,6 @@
-langchain 
-wikipedia 
-langchain-community 
+langchain
+wikipedia
+langchain-community
 langchain-openai
 langchain-anthropic
 python-dotenv
@@ -12,3 +12,6 @@ pytest>=7.4.0
 requests>=2.31.0
 httpx>=0.25.0  # For FastAPI testing
 pytest-asyncio>=0.21.1  # For async tests
+browser-use==0.1.45
+patchright==1.52.2
+

@@ -7,7 +7,11 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 
 # Import tools from modules
-from src.tools.base import search_tool, wiki_tool, save_tool, shell_tool
+from src.tools.base import (
+    search_tool, wiki_tool, save_tool, shell_tool, read_pdf_tool,
+    zillow_search_tool, zillow_property_tool,
+    property_finder_tool, property_details_tool, property_comps_tool, property_analysis_tool
+)
 from src.memory.tools import memory_tools
 from src.reasoning.tools import reasoning_tools
 
@@ -47,6 +51,41 @@ def create_agent(model="gpt-4o-mini"):
 
                 Use memory tools to recall previous conversations or facts when relevant.
                 Use reasoning tools to structure your thinking on complex problems.
+                
+                For real estate property analysis:
+                - Use analyze_property to get a complete analysis of a property by address or URL
+                - Use find_property to search for a property by address or description
+                - Use extract_property_details to get comprehensive information about a property
+                - Use find_comparable_properties to analyze similar properties in the area
+                
+                For basic Zillow searches:
+                - Use zillow_search for simple property searches by location
+                - Use zillow_property_details for basic property information
+
+                When presenting real estate property information, your final response should be
+                formatted with a clean, structured layout like this:
+
+                ============================================================
+                📋 TOPIC: Property Analysis for [ADDRESS]
+                ============================================================
+
+                📌 ANSWER:
+                ------------------------------------------------------------
+                [CLEAR, CONCISE 2-3 SENTENCE SUMMARY OF THE PROPERTY]
+                - Include property details, notable features, and any key insights
+                - Keep it focused on the most important information
+                ------------------------------------------------------------
+
+                🔍 REASONING:
+                [BRIEF EXPLANATION OF HOW YOU ANALYZED THE PROPERTY]
+
+                📚 Sources: [LINKS TO PROPERTY LISTINGS OR OTHER SOURCES]
+                🛠️ Tools used: [LIST OF TOOLS USED]
+                
+                This format helps users quickly understand the key details about the property.
+                
+                The analyze_property tool will provide you with a concise summary that you can include
+                in your answer section.
 
                 Always provide your reasoning process to show how you arrived at your answer.
 
@@ -59,17 +98,45 @@ def create_agent(model="gpt-4o-mini"):
         ]
     ).partial(format_instructions=parser.get_format_instructions())
 
-    # Combine all tools
-    tools = [search_tool, wiki_tool, save_tool, shell_tool] + memory_tools + reasoning_tools
+    # Combine all tools, flattening any tool lists
+    basic_tools = [
+        search_tool, 
+        wiki_tool, 
+        save_tool, 
+        shell_tool, 
+        read_pdf_tool,
+        zillow_search_tool,
+        zillow_property_tool,
+        property_finder_tool,
+        property_details_tool,
+        property_comps_tool,
+        property_analysis_tool
+    ]
+    
+    # Flatten memory_tools and reasoning_tools if they are lists
+    all_tools = []
+    all_tools.extend(basic_tools)
+    
+    # Add memory tools individually if it's a list
+    if isinstance(memory_tools, list):
+        all_tools.extend(memory_tools)
+    else:
+        all_tools.append(memory_tools)
+        
+    # Add reasoning tools individually if it's a list
+    if isinstance(reasoning_tools, list):
+        all_tools.extend(reasoning_tools)
+    else:
+        all_tools.append(reasoning_tools)
 
     # Create the agent
     agent = create_tool_calling_agent(
         llm=llm,
         prompt=prompt,
-        tools=tools
+        tools=all_tools
     )
 
     # Create the agent executor
-    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+    agent_executor = AgentExecutor(agent=agent, tools=all_tools, verbose=True)
 
     return agent_executor, parser

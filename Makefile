@@ -21,6 +21,7 @@ clean-venv: ## Remove and recreate virtual environment
 install: venv ## Install dependencies
 	$(VENV_BIN)$(PIP_COMMAND) install --upgrade pip
 	$(VENV_BIN)$(PIP_COMMAND) install -r requirements.txt
+	$(VENV_BIN)patchright install
 
 format: ## Format code
 	$(VENV_BIN)$(PYTHON_COMMAND) -m black .
